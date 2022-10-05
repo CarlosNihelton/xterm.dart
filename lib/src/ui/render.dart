@@ -428,12 +428,7 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
       }
 
       if (_shouldShowCursor) {
-        _painter.paintCursor(
-          canvas,
-          offset + cursorOffset,
-          cursorType: _cursorType,
-          hasFocus: _focusNode.hasFocus,
-        );
+        _paintCursor(canvas, cursorOffset);
       }
     }
 
@@ -451,6 +446,51 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
         effectFirstLine,
         effectLastLine,
       );
+    }
+  }
+
+  /// Paints the cursor based on the current cursor type.
+  void _paintCursor(Canvas canvas, Offset offset) {
+    var color = _theme.cursor;
+    if (color == null) {
+      final x = _terminal.buffer.cursorX;
+      final y = _terminal.buffer.absoluteCursorY;
+      if (_controller.selection?.contains(CellOffset(x, y)) == true) {
+        color = _theme.background;
+      } else {
+        color = _theme.foreground;
+      }
+    }
+
+    final paint = Paint()
+      ..color = color
+      ..strokeWidth = 1;
+
+    if (!_focusNode.hasFocus) {
+      paint.style = PaintingStyle.stroke;
+      canvas.drawRect(offset & _charSize, paint);
+      return;
+    }
+
+    if (_theme.cursor != null) {
+      switch (_cursorType) {
+        case TerminalCursorType.block:
+          paint.style = PaintingStyle.fill;
+          canvas.drawRect(offset & _charSize, paint);
+          return;
+        case TerminalCursorType.underline:
+          return canvas.drawLine(
+            Offset(offset.dx, _charSize.height - 1),
+            Offset(offset.dx + _charSize.width, _charSize.height - 1),
+            paint,
+          );
+        case TerminalCursorType.verticalBar:
+          return canvas.drawLine(
+            Offset(offset.dx, 0),
+            Offset(offset.dx, _charSize.height),
+            paint,
+          );
+      }
     }
   }
 
@@ -483,6 +523,50 @@ class RenderTerminal extends RenderBox with RelayoutWhenSystemFontsChangeMixin {
     paragraph.layout(ParagraphConstraints(width: size.width));
 
     canvas.drawParagraph(paragraph, Offset(0, offset.dy));
+  }
+
+  void _toggleInverse(CellData cellData) {
+    if (cellData.flags & CellFlags.inverse == 0) {
+      cellData.flags |= CellFlags.inverse;
+    } else {
+      cellData.flags &= ~CellFlags.inverse;
+    }
+  }
+
+  /// Paints [line] to [canvas] at [offset]. The x offset of [offset] is usually
+  /// 0, and the y offset is the top of the line.
+  void _paintLine(Canvas canvas, int y, Offset offset) {
+    final line = _terminal.buffer.lines[y];
+    final cellData = CellData.empty();
+    final cellWidth = _charSize.width;
+
+    final visibleCells = size.width ~/ cellWidth + 1;
+    final effectCells = min(visibleCells, line.length);
+
+    for (var x = 0; x < effectCells; x++) {
+      line.getCellData(x, cellData);
+
+      if (_theme.selection == null &&
+          _controller.selection?.contains(CellOffset(x, y)) == true) {
+        _toggleInverse(cellData);
+      }
+      if (_theme.cursor == null &&
+          _focusNode.hasFocus &&
+          _terminal.buffer.absoluteCursorY == y &&
+          _terminal.buffer.cursorX == x) {
+        _toggleInverse(cellData);
+      }
+
+      final charWidth = cellData.content >> CellContent.widthShift;
+      final cellOffset = offset.translate(x * cellWidth, 0);
+
+      _paintCellBackground(canvas, cellOffset, cellData);
+      _paintCellForeground(canvas, cellOffset, cellData);
+
+      if (charWidth == 2) {
+        x++;
+      }
+    }
   }
 
   void _paintSelection(
